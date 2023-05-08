@@ -1,142 +1,55 @@
-import Database.WebDAO
-import Database.WebTable
-import Models.Web
-import kotlinx.serialization.Serializable
+import Interfaces.WebRepository
+import Models.WebModel
+import Repositories.InFileWebRepository
+import Repositories.InMemoryWebRepository
+import Repositories.InSQLWebRepository
 import java.awt.Desktop
 import java.net.URI
 import java.util.*
-import kotlinx.serialization.*
-import kotlinx.serialization.json.Json
-import java.nio.file.Paths
-import kotlin.io.path.Path
-import kotlin.io.path.readLines
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
-
-import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.transactions.transaction
-import java.io.BufferedReader
-import java.io.File
-import java.io.FileReader
 
 class DataStorage
 {
-    var tempList = mutableListOf<Web>()
-
     var storageType = StorageType.SQL
+    lateinit var repo : WebRepository
 
-    lateinit var db: Database
-    val path = Paths.get("").toAbsolutePath().toString()+"_storage.json"
+    object ServiceLocator {
+        val fileRepository : WebRepository = InFileWebRepository()
+        val memoryRepository : WebRepository = InMemoryWebRepository()
+        val sqlRepository : WebRepository = InSQLWebRepository()
+    }
 
     init {
-        setupStorage()
+        setupRepository()
     }
 
     fun changeStorage(id : Int)
     {
         storageType = StorageType.fromId(id)!!
-        setupStorage()
+        setupRepository()
     }
 
-    fun setupStorage()
+    fun setupRepository()
     {
         when(storageType)
         {
-            StorageType.FILE -> initFile()
-            StorageType.MEMORY -> initMemory()
-            StorageType.SQL -> initSQL()
+            StorageType.FILE -> {repo = ServiceLocator.fileRepository}
+            StorageType.MEMORY ->{repo = ServiceLocator.memoryRepository}
+            StorageType.SQL -> {repo = ServiceLocator.sqlRepository}
         }
     }
 
-    private fun initSQL()
+    fun insert(web : WebModel)
     {
-        db = Database.connect(
-            "jdbc:postgresql://localhost:5432/postgres",
-            driver = "com.impossibl.postgres.jdbc.PGDriver",
-            user = "postgres",
-            password = "1234"
-        )
-        initExposed()
+        repo.insert(web)
     }
 
-    private fun initMemory()
+    fun list() : List<WebModel>
     {
-        db = Database.connect("jdbc:h2:mem:regular;DB_CLOSE_DELAY=-1;", "org.h2.Driver")
-        initExposed()
+        return repo.list()
     }
 
-    private fun initExposed() {
-
-        transaction {
-            addLogger(StdOutSqlLogger)
-
-            SchemaUtils.create(WebTable)
-        }
-
-        var query : MutableList<WebDAO>
-
-        transaction {
-
-            query = WebDAO.all().toMutableList()
-
-            val temp : MutableList<Web> = mutableListOf()
-            for(i in query)
-            {
-                val z = Web(i.name, i.link, i.read)
-                temp.add(z)
-            }
-            tempList = temp
-        }
-    }
-
-    private fun initFile() {
-        println(path)
-
-        var file = File(path)
-        var fileExists = file.exists()
-
-        if(fileExists){
-            val text : String = Path(path).readText()
-            val lines : List<String> = Path(path).readLines()
-
-            tempList = Json.decodeFromString(text)
-        }
-    }
-
-    fun saveData()
-    {
-        when(storageType)
-        {
-            StorageType.FILE -> saveToFile()
-            StorageType.MEMORY -> saveToMemory()
-            StorageType.SQL -> saveToMemory()
-        }
-    }
-
-    private fun saveToFile()
-    {
-        val json = Json.encodeToString(tempList)
-
-        val path = Path(path)
-        path.writeText(json)
-    }
-
-    private fun saveToMemory()
-    {
-        transaction {
-            WebDAO.all().forEach { it.delete() }
-        }
-
-        transaction {
-            for(i in tempList)
-            {
-                val movie = WebDAO.new {
-                    name = i.name
-                    link = i.link
-                    read = i.read
-                }
-            }
-        }
+    fun update(webModel: WebModel) {
+        repo.update(webModel)
     }
 }
 
@@ -176,13 +89,12 @@ class Menu() {
             print("> ")
             when(scanner.nextLine().toInt())
             {
-                1 -> addWeb()
+                1 -> {addWeb(); enter()}
                 2 -> {listWebs(); enter()}
                 3 -> {openWeb(); enter()}
                 4 -> changeStorageType()
                 5 -> return
             }
-            dataStorage.saveData()
         }
     }
 
@@ -196,31 +108,38 @@ class Menu() {
         print("Link: ")
         val link = scanner.nextLine()
 
-        dataStorage.tempList.add(Web(name,link))
+        dataStorage.insert(WebModel(name, link, false))
     }
 
     private fun listWebs()
     {
+        var index = 0
         println("Listando webs")
-        for(i in dataStorage.tempList.indices)
+        for(i in dataStorage.list())
         {
-            println("$i.- ${dataStorage.tempList[i].name} - ${dataStorage.tempList[i].link} - Is readed: ${dataStorage.tempList[i].read}")
+            println("$index .- $${i.name} - ${i.link} - Is readed: ${i.read}")
+            index++
         }
     }
 
     private fun openWeb()
     {
         listWebs()
+        val webList = dataStorage.list()
         println("Indica el num de la web para abrir")
         val id = scanner.nextLine().toInt()
-        openUrlInBrowser(dataStorage.tempList[id].link)
-        dataStorage.tempList[id].read = true
+        openUrlInBrowser(webList[id].link)
+        webList[id].read = true
+
+        dataStorage.update(webList[id])
+
         println("Web abierta")
     }
 
     private fun changeStorageType()
     {
         println("Seleccione el método de guardado")
+        println("Actual: ${dataStorage.storageType.name}")
 
         println("1.- File")
         println("2.- Memory")
